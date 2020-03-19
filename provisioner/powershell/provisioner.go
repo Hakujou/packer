@@ -73,6 +73,8 @@ type Config struct {
 
 	ExecutionPolicy ExecutionPolicy `mapstructure:"execution_policy"`
 
+	remoteCleanUpScriptPath string
+
 	ctx interpolate.Context
 }
 
@@ -154,6 +156,8 @@ func (p *Provisioner) Prepare(raws ...interface{}) error {
 	if p.config.Vars == nil {
 		p.config.Vars = make([]string, 0)
 	}
+
+	p.config.remoteCleanUpScriptPath = filepath.Join(filepath.Dir(p.config.RemotePath), fmt.Sprintf("packer-cleanup-%s.ps1", uuid.TimeOrderedUUID()))
 
 	var errs error
 	if p.config.Script != "" && len(p.config.Scripts) > 0 {
@@ -242,6 +246,7 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		defer os.Remove(temp)
 	}
 
+	createdScripts := make([]string, 0, len(scripts))
 	for _, path := range scripts {
 		ui.Say(fmt.Sprintf("Provisioning with powershell script: %s", path))
 
@@ -288,50 +293,55 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		// Close the original file since we copied it
 		f.Close()
 
-		log.Printf("%s returned with exit code %d", p.config.RemotePath, cmd.ExitStatus())
+		// Record the created file so we can clean it up later
+		createdScripts = append(createdScripts, p.config.RemotePath)
 
+		log.Printf("%s returned with exit code %d", p.config.RemotePath, cmd.ExitStatus())
 		if err := p.config.ValidExitCode(cmd.ExitStatus()); err != nil {
 			return err
 		}
+	}
 
-		if !p.config.SkipClean {
-			files := []string{p.config.RemotePath, p.config.RemoteEnvVarPath}
-			command, err := p.cleanUpRemoteFilesCommand(files...)
+	if !p.config.SkipClean {
+		err := retry.Config{StartTimeout: p.config.StartRetryTimeout}.Run(ctx, func(ctx context.Context) error {
+			command, err := p.createRemoteCleanUpCommand(createdScripts)
 			if err != nil {
-				log.Printf("failed to prepare packer cleanup script")
+				log.Printf("failed to create a remote cleanup script: %s", err)
 			}
 
-			cmd = &packer.RemoteCmd{Command: command}
-			if err := cmd.RunWithUi(ctx, comm, ui); err != nil {
-				log.Printf("failed to clean up temporary files")
-			}
+			cmd := &packer.RemoteCmd{Command: command}
+			return cmd.RunWithUi(ctx, comm, ui)
+
+		})
+		if err != nil {
+			log.Printf("failed to clean up temporary files: %s", strings.Join(createdScripts, ","))
 		}
-
 	}
 
 	return nil
 }
 
-func (p *Provisioner) cleanUpRemoteFilesCommand(files ...string) (string, error) {
-	if len(files) == 0 {
-		return "", fmt.Errorf("no files provided for cleanup")
+// createRemoteCleanUpCommand will generated a powershell script that will remove all of the remote files;
+// returning a command that can be executed remotely to do the cleanup.
+func (p *Provisioner) createRemoteCleanUpCommand(remoteFiles []string) (string, error) {
+	if len(remoteFiles) == 0 {
+		return "", fmt.Errorf("no remoteFiles provided for cleanup")
 	}
 
 	var b strings.Builder
-	baseDir := filepath.Dir(p.config.RemotePath)
-	uploadPath := filepath.Join(baseDir, fmt.Sprintf("packer-cleanup-%s.ps1", uuid.TimeOrderedUUID()))
 	// This script should self destruct.
-	files = append(files, uploadPath)
-	for _, filename := range files {
+	remotePath := p.config.remoteCleanUpScriptPath
+	remoteFiles = append(remoteFiles, remotePath)
+	for _, filename := range remoteFiles {
 		fmt.Fprintf(&b, "Remove-Item %s\n", filename)
 	}
 
-	if err := p.communicator.Upload(uploadPath, strings.NewReader(b.String()), nil); err != nil {
-		log.Printf("packer clean up script %q failed to upload: %s", uploadPath, err)
+	if err := p.communicator.Upload(remotePath, strings.NewReader(b.String()), nil); err != nil {
+		log.Printf("packer clean up script %q failed to upload: %s", remotePath, err)
 	}
 
 	data := map[string]string{
-		"Path": uploadPath,
+		"Path": remotePath,
 		"Vars": p.config.RemoteEnvVarPath,
 	}
 	p.config.ctx.Data = data

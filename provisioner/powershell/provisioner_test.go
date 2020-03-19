@@ -13,9 +13,17 @@ import (
 	"github.com/hashicorp/packer/packer"
 )
 
+// skip_clean is set to true otherwise the last command executed by the provisioner is the cleanup.
 func testConfig() map[string]interface{} {
 	return map[string]interface{}{
 		"inline": []interface{}{"foo", "bar"},
+	}
+}
+
+func testConfigWithSkipClean() map[string]interface{} {
+	return map[string]interface{}{
+		"inline":     []interface{}{"foo", "bar"},
+		"skip_clean": true,
 	}
 }
 
@@ -385,7 +393,7 @@ func TestProvisionerProvision_InvalidExitCodes(t *testing.T) {
 }
 
 func TestProvisionerProvision_Inline(t *testing.T) {
-	config := testConfig()
+	config := testConfigWithSkipClean()
 	delete(config, "inline")
 
 	// Defaults provided by Packer
@@ -437,7 +445,7 @@ func TestProvisionerProvision_Scripts(t *testing.T) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
-	config := testConfig()
+	config := testConfigWithSkipClean()
 	delete(config, "inline")
 	config["scripts"] = []string{tempFile.Name()}
 	config["packer_build_name"] = "foobuild"
@@ -463,11 +471,11 @@ func TestProvisionerProvision_Scripts(t *testing.T) {
 
 func TestProvisionerProvision_ScriptsWithEnvVars(t *testing.T) {
 	tempFile, _ := ioutil.TempFile("", "packer")
-	config := testConfig()
 	ui := testUi()
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
+	config := testConfigWithSkipClean()
 	delete(config, "inline")
 
 	config["scripts"] = []string{tempFile.Name()}
@@ -494,6 +502,55 @@ func TestProvisionerProvision_ScriptsWithEnvVars(t *testing.T) {
 	matched := re.MatchString(cmd)
 	if !matched {
 		t.Fatalf("Got unexpected command: %s", cmd)
+	}
+}
+
+func TestProvisionerProvision_SkipClean(t *testing.T) {
+	tempFile, _ := ioutil.TempFile("", "packer")
+	defer func() {
+		tempFile.Close()
+		os.Remove(tempFile.Name())
+	}()
+
+	config := map[string]interface{}{
+		"scripts":     []string{tempFile.Name()},
+		"remote_path": "c:/Windows/Temp/script.ps1",
+	}
+
+	tt := []struct {
+		SkipClean                bool
+		LastExecutedCommandRegex string
+	}{
+		{
+			SkipClean:                true,
+			LastExecutedCommandRegex: `powershell -executionpolicy bypass "& { if \(Test-Path variable:global:ProgressPreference\){set-variable -name variable:global:ProgressPreference -value 'SilentlyContinue'};\. c:/Windows/Temp/packer-ps-env-vars-[[:alnum:]]{8}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{12}\.ps1; &'c:/Windows/Temp/script.ps1'; exit \$LastExitCode }"`,
+		},
+		{
+			SkipClean:                false,
+			LastExecutedCommandRegex: `powershell -executionpolicy bypass "& { if \(Test-Path variable:global:ProgressPreference\){set-variable -name variable:global:ProgressPreference -value 'SilentlyContinue'};\. c:/Windows/Temp/packer-ps-env-vars-[[:alnum:]]{8}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{12}\.ps1; &'c:/Windows/Temp/packer-cleanup-[[:alnum:]]{8}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{4}-[[:alnum:]]{12}\.ps1'; exit \$LastExitCode }"`,
+		},
+	}
+
+	for _, tc := range tt {
+		tc := tc
+		p := new(Provisioner)
+		comm := new(packer.MockCommunicator)
+
+		config["skip_clean"] = tc.SkipClean
+		p.Prepare(config)
+		err := p.Provision(context.Background(), testUi(), comm, make(map[string]interface{}))
+		if err != nil {
+			t.Fatal("should not have error")
+		}
+
+		// When SkipClean is false the last executed command should be the clean up command;
+		// otherwise it will be the execution command for the provisioning script.
+		cmd := comm.StartCmd.Command
+		re := regexp.MustCompile(tc.LastExecutedCommandRegex)
+		matched := re.MatchString(cmd)
+		if !matched {
+			t.Fatalf(`Got unexpected command when SkipClean is %t: %s`, tc.SkipClean, cmd)
+		}
 	}
 }
 
