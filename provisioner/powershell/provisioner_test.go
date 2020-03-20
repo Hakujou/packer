@@ -13,24 +13,6 @@ import (
 	"github.com/hashicorp/packer/packer"
 )
 
-// skip_clean is set to true otherwise the last command executed by the provisioner is the cleanup.
-func testConfig() map[string]interface{} {
-	return map[string]interface{}{
-		"inline": []interface{}{"foo", "bar"},
-	}
-}
-
-func testConfigWithSkipClean() map[string]interface{} {
-	return map[string]interface{}{
-		"inline":     []interface{}{"foo", "bar"},
-		"skip_clean": true,
-	}
-}
-
-func init() {
-	//log.SetOutput(ioutil.Discard)
-}
-
 func TestProvisionerPrepare_extractScript(t *testing.T) {
 	config := testConfig()
 	p := new(Provisioner)
@@ -341,11 +323,6 @@ func testUi() *packer.BasicUi {
 	}
 }
 
-func testObjects() (packer.Ui, packer.Communicator) {
-	ui := testUi()
-	return ui, new(packer.MockCommunicator)
-}
-
 func TestProvisionerProvision_ValidExitCodes(t *testing.T) {
 	config := testConfig()
 	delete(config, "inline")
@@ -393,6 +370,7 @@ func TestProvisionerProvision_InvalidExitCodes(t *testing.T) {
 }
 
 func TestProvisionerProvision_Inline(t *testing.T) {
+	// skip_clean is set to true otherwise the last command executed by the provisioner is the cleanup.
 	config := testConfigWithSkipClean()
 	delete(config, "inline")
 
@@ -406,7 +384,7 @@ func TestProvisionerProvision_Inline(t *testing.T) {
 	p.config.PackerBuildName = "vmware"
 	p.config.PackerBuilderType = "iso"
 	comm := new(packer.MockCommunicator)
-	p.Prepare(config)
+	_ = p.Prepare(config)
 	err := p.Provision(context.Background(), ui, comm, make(map[string]interface{}))
 	if err != nil {
 		t.Fatal("should not have error")
@@ -445,6 +423,7 @@ func TestProvisionerProvision_Scripts(t *testing.T) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
+	// skip_clean is set to true otherwise the last command executed by the provisioner is the cleanup.
 	config := testConfigWithSkipClean()
 	delete(config, "inline")
 	config["scripts"] = []string{tempFile.Name()}
@@ -475,6 +454,7 @@ func TestProvisionerProvision_ScriptsWithEnvVars(t *testing.T) {
 	defer os.Remove(tempFile.Name())
 	defer tempFile.Close()
 
+	// skip_clean is set to true otherwise the last command executed by the provisioner is the cleanup.
 	config := testConfigWithSkipClean()
 	delete(config, "inline")
 
@@ -534,11 +514,14 @@ func TestProvisionerProvision_SkipClean(t *testing.T) {
 	for _, tc := range tt {
 		tc := tc
 		p := new(Provisioner)
+		ui := testUi()
 		comm := new(packer.MockCommunicator)
 
 		config["skip_clean"] = tc.SkipClean
-		p.Prepare(config)
-		err := p.Provision(context.Background(), testUi(), comm, make(map[string]interface{}))
+		if err := p.Prepare(config); err != nil {
+			t.Fatalf("failed to prepare config when SkipClean is %t: %s", tc.SkipClean, err)
+		}
+		err := p.Provision(context.Background(), ui, comm, make(map[string]interface{}))
 		if err != nil {
 			t.Fatal("should not have error")
 		}
@@ -552,12 +535,6 @@ func TestProvisionerProvision_SkipClean(t *testing.T) {
 			t.Fatalf(`Got unexpected command when SkipClean is %t: %s`, tc.SkipClean, cmd)
 		}
 	}
-}
-
-func TestProvisionerProvision_UISlurp(t *testing.T) {
-	// UI should be called n times
-
-	// UI should receive following messages / output
 }
 
 func TestProvisionerProvision_UploadFails(t *testing.T) {
@@ -718,4 +695,17 @@ func TestProvision_uploadEnvVars(t *testing.T) {
 func TestCancel(t *testing.T) {
 	// Don't actually call Cancel() as it performs an os.Exit(0)
 	// which kills the 'go test' tool
+}
+
+func testConfig() map[string]interface{} {
+	return map[string]interface{}{
+		"inline": []interface{}{"foo", "bar"},
+	}
+}
+
+func testConfigWithSkipClean() map[string]interface{} {
+	return map[string]interface{}{
+		"inline":     []interface{}{"foo", "bar"},
+		"skip_clean": true,
+	}
 }
