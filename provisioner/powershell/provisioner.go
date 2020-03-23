@@ -246,7 +246,8 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		defer os.Remove(temp)
 	}
 
-	uploadedScripts := make([]string, 0, len(scripts))
+	// every provisioner run will only have one env var script file so lets add it first
+	uploadedScripts := []string{p.config.RemoteEnvVarPath}
 	for _, path := range scripts {
 		ui.Say(fmt.Sprintf("Provisioning with powershell script: %s", path))
 
@@ -293,8 +294,8 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		// Close the original file since we copied it
 		f.Close()
 
-		// Record the created file so we can clean it up later
-		uploadedScripts = append(uploadedScripts, p.config.RemotePath)
+		// Record every other uploaded script file so we can clean it up later
+		uploadedScripts = append(uploadedScripts, p.config.RemoteEnvVarPath)
 
 		log.Printf("%s returned with exit code %d", p.config.RemotePath, cmd.ExitStatus())
 		if err := p.config.ValidExitCode(cmd.ExitStatus()); err != nil {
