@@ -295,7 +295,7 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		f.Close()
 
 		// Record every other uploaded script file so we can clean it up later
-		uploadedScripts = append(uploadedScripts, p.config.RemoteEnvVarPath)
+		uploadedScripts = append(uploadedScripts, p.config.RemotePath)
 
 		log.Printf("%s returned with exit code %d", p.config.RemotePath, cmd.ExitStatus())
 		if err := p.config.ValidExitCode(cmd.ExitStatus()); err != nil {
