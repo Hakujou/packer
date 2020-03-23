@@ -311,6 +311,7 @@ func (p *Provisioner) Provision(ctx context.Context, ui packer.Ui, comm packer.C
 		command, err := p.createRemoteCleanUpCommand(uploadedScripts)
 		if err != nil {
 			log.Printf("failed to create a remote cleanup script: %s", err)
+			return err
 		}
 
 		cmd := &packer.RemoteCmd{Command: command}
@@ -339,7 +340,7 @@ func (p *Provisioner) createRemoteCleanUpCommand(remoteFiles []string) (string, 
 	}
 
 	if err := p.communicator.Upload(remotePath, strings.NewReader(b.String()), nil); err != nil {
-		log.Printf("clean up script %q failed to upload: %s", remotePath, err)
+		return "", fmt.Errorf("clean up script %q failed to upload: %s", remotePath, err)
 	}
 
 	data := map[string]string{
